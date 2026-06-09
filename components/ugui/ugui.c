@@ -5015,14 +5015,14 @@ void UG_PutString( UG_S16 x, UG_S16 y, char* str )
 {
    UG_S16 xp,yp;
    UG_U8 cw;
-   char chr;
+   UG_U8 chr;
 
    xp=x;
    yp=y;
 
    while ( *str != 0 )
    {
-      chr = *str++;
+      chr = (UG_U8)*str++;
 	  if (chr < gui->font.start_char || chr > gui->font.end_char) continue;
       if ( chr == '\n' )
       {
@@ -5037,7 +5037,7 @@ void UG_PutString( UG_S16 x, UG_S16 y, char* str )
          yp += gui->font.char_height+gui->char_v_space;
       }
 
-      UG_PutChar(chr, xp, yp, gui->fore_color, gui->back_color);
+      UG_PutChar((char)chr, xp, yp, gui->fore_color, gui->back_color);
 
       xp += cw + gui->char_h_space;
    }
@@ -5482,7 +5482,7 @@ void _UG_PutText(UG_TEXT* txt)
    UG_S16 char_h_space=txt->h_space;
    UG_S16 char_v_space=txt->v_space;
 
-   char chr;
+   UG_U8 chr;
 
    char* str = txt->str;
    char* c = str;
@@ -5517,9 +5517,10 @@ void _UG_PutText(UG_TEXT* txt)
       wl = 0;
       while( (*c != 0) && (*c != '\n') )
       {
-         if (*c < txt->font->start_char || *c > txt->font->end_char) {c++; continue;}
+         UG_U8 ch = (UG_U8)*c;
+         if (ch < txt->font->start_char || ch > txt->font->end_char) {c++; continue;}
          sl++;
-         wl += (txt->font->widths ? txt->font->widths[*c - txt->font->start_char] : char_width) + char_h_space;
+         wl += (txt->font->widths ? txt->font->widths[ch - txt->font->start_char] : char_width) + char_h_space;
          c++;
       }
       wl -= char_h_space;
@@ -5534,9 +5535,10 @@ void _UG_PutText(UG_TEXT* txt)
 
       while( (*str != '\n') )
       {
-         chr = *str++;
+         chr = (UG_U8)*str++;
          if ( chr == 0 ) return;
-         _UG_PutChar(chr,xp,yp,txt->fc,txt->bc,txt->font);
+         if (chr < txt->font->start_char || chr > txt->font->end_char) continue;
+         _UG_PutChar((char)chr,xp,yp,txt->fc,txt->bc,txt->font);
          xp += (txt->font->widths ? txt->font->widths[chr - txt->font->start_char] : char_width) + char_h_space;
       }
       str++;
@@ -8330,5 +8332,4 @@ void _UG_ImageUpdate(UG_WINDOW* wnd, UG_OBJECT* obj)
       obj->state &= ~OBJ_STATE_UPDATE;
    }
 }
-
 

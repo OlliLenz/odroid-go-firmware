@@ -1,14 +1,14 @@
 #include "freertos/FreeRTOS.h"
-#include "esp_wifi.h"
+#include "freertos/task.h"
 #include "esp_system.h"
-#include "esp_event.h"
-#include "esp_event_loop.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
 #include "esp_partition.h"
 #include "esp_ota_ops.h"
 #include "esp_heap_caps.h"
-#include "esp_flash_data_types.h"
+#include "esp_flash.h"
+#include "esp_flash_partitions.h"
+#include "esp_rom_md5.h"
 #include "rom/crc.h"
 
 #include <string.h>
@@ -69,7 +69,7 @@ void indicate_error()
     while (true) {
         gpio_set_level(GPIO_NUM_2, level);
         level = !level;
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -274,14 +274,54 @@ void boot_application()
 #define PART_TYPE_APP 0x00
 #define PART_SUBTYPE_FACTORY 0x00
 
+static void write_flash_checked(size_t address, const void* data, size_t length, const char* error_prefix)
+{
+    esp_err_t err = esp_flash_write(NULL, data, address, length);
+    if (err != ESP_OK)
+    {
+        printf("esp_flash_write failed. address=%#08lx, length=%lu, err=%d\n",
+            (unsigned long)address, (unsigned long)length, err);
+        DisplayError(error_prefix);
+        indicate_error();
+    }
+
+    void* verify_data = malloc(length);
+    if (!verify_data)
+    {
+        DisplayError("VERIFY MEMORY ERROR");
+        indicate_error();
+    }
+
+    err = esp_flash_read(NULL, verify_data, address, length);
+    if (err != ESP_OK)
+    {
+        printf("esp_flash_read verify failed. address=%#08lx, length=%lu, err=%d\n",
+            (unsigned long)address, (unsigned long)length, err);
+        free(verify_data);
+        DisplayError("VERIFY READ ERROR");
+        indicate_error();
+    }
+
+    if (memcmp(data, verify_data, length) != 0)
+    {
+        printf("flash verify mismatch. address=%#08lx, length=%lu\n",
+            (unsigned long)address, (unsigned long)length);
+        free(verify_data);
+        DisplayError("VERIFY MATCH ERROR");
+        indicate_error();
+    }
+
+    free(verify_data);
+}
+
 static void print_partitions()
 {
-    const esp_partition_info_t* partition_data = (const esp_partition_info_t*)malloc(ESP_PARTITION_TABLE_MAX_LEN);
+    esp_partition_info_t* partition_data = (esp_partition_info_t*)malloc(ESP_PARTITION_TABLE_MAX_LEN);
     if (!partition_data) abort();
 
     esp_err_t err;
 
-    err = spi_flash_read(ESP_PARTITION_TABLE_OFFSET, (void*)partition_data, ESP_PARTITION_TABLE_MAX_LEN);
+    err = esp_flash_read(NULL, partition_data, ESP_PARTITION_TABLE_OFFSET, ESP_PARTITION_TABLE_MAX_LEN);
     if (err != ESP_OK) abort();
 
     for (int i = 0; i < ESP_PARTITION_TABLE_MAX_ENTRIES; ++i)
@@ -295,9 +335,10 @@ static void print_partitions()
         printf("\tmagic=%#06x\n", part->magic);
         printf("\ttype=%#04x\n", part->type);
         printf("\tsubtype=%#04x\n", part->subtype);
-        printf("\t[pos.offset=%#010x, pos.size=%#010x]\n", part->pos.offset, part->pos.size);
+        printf("\t[pos.offset=%#010lx, pos.size=%#010lx]\n",
+            (unsigned long)part->pos.offset, (unsigned long)part->pos.size);
         printf("\tlabel='%-16s'\n", part->label);
-        printf("\tflags=%#010x\n", part->flags);
+        printf("\tflags=%#010lx\n", (unsigned long)part->flags);
         printf("\n");
     }
 
@@ -309,14 +350,14 @@ static void write_partition_table(odroid_partition_t* parts, size_t parts_count)
 
 
     // Read table
-    const esp_partition_info_t* partition_data = (const esp_partition_info_t*)malloc(ESP_PARTITION_TABLE_MAX_LEN);
+    esp_partition_info_t* partition_data = (esp_partition_info_t*)malloc(ESP_PARTITION_TABLE_MAX_LEN);
     if (!partition_data)
     {
         DisplayError("TABLE MEMORY ERROR");
         indicate_error();
     }
 
-    err = spi_flash_read(ESP_PARTITION_TABLE_OFFSET, (void*)partition_data, ESP_PARTITION_TABLE_MAX_LEN);
+    err = esp_flash_read(NULL, partition_data, ESP_PARTITION_TABLE_OFFSET, ESP_PARTITION_TABLE_MAX_LEN);
     if (err != ESP_OK)
     {
         DisplayError("TABLE READ ERROR");
@@ -350,8 +391,8 @@ static void write_partition_table(odroid_partition_t* parts, size_t parts_count)
         indicate_error();
     }
 
-    printf("%s: startTableEntry=%d, startFlashAddress=%#08x\n",
-        __func__, startTableEntry, startFlashAddress);
+    printf("%s: startTableEntry=%d, startFlashAddress=%#08lx\n",
+        __func__, startTableEntry, (unsigned long)startFlashAddress);
 
     // blank partition table entries
     for (int i = startTableEntry; i < ESP_PARTITION_TABLE_MAX_ENTRIES; ++i)
@@ -378,6 +419,25 @@ static void write_partition_table(odroid_partition_t* parts, size_t parts_count)
         offset += parts[i].length;
     }
 
+    // ESP-IDF 5 verifies an MD5 entry when CONFIG_PARTITION_TABLE_MD5 is enabled.
+    int md5Entry = startTableEntry + parts_count;
+    if (md5Entry >= ESP_PARTITION_TABLE_MAX_ENTRIES)
+    {
+        DisplayError("TABLE MD5 ERROR");
+        indicate_error();
+    }
+
+    md5_context_t context;
+    uint8_t digest[ESP_ROM_MD5_DIGEST_LEN];
+    esp_rom_md5_init(&context);
+    esp_rom_md5_update(&context, partition_data, md5Entry * sizeof(esp_partition_info_t));
+    esp_rom_md5_final(digest, &context);
+
+    esp_partition_info_t* md5_part = &partition_data[md5Entry];
+    memset(md5_part, 0xff, sizeof(*md5_part));
+    md5_part->magic = ESP_PARTITION_MAGIC_MD5;
+    memcpy(((uint8_t*)md5_part) + ESP_PARTITION_MD5_OFFSET, digest, sizeof(digest));
+
     //abort();
 
     // Erase partition table
@@ -387,7 +447,7 @@ static void write_partition_table(odroid_partition_t* parts, size_t parts_count)
         indicate_error();
     }
 
-    err = spi_flash_erase_range(ESP_PARTITION_TABLE_OFFSET, 4096);
+    err = esp_flash_erase_region(NULL, ESP_PARTITION_TABLE_OFFSET, 4096);
     if (err != ESP_OK)
     {
         DisplayError("TABLE ERASE ERROR");
@@ -395,14 +455,9 @@ static void write_partition_table(odroid_partition_t* parts, size_t parts_count)
     }
 
     // Write new table
-    err = spi_flash_write(ESP_PARTITION_TABLE_OFFSET, (void*)partition_data, ESP_PARTITION_TABLE_MAX_LEN);
-    if (err != ESP_OK)
-    {
-        DisplayError("TABLE WRITE ERROR");
-        indicate_error();
-    }
+    write_flash_checked(ESP_PARTITION_TABLE_OFFSET, partition_data, ESP_PARTITION_TABLE_MAX_LEN, "TABLE WRITE ERROR");
 
-    esp_partition_reload_table();
+    esp_partition_unload_all();
 }
 
 
@@ -414,7 +469,7 @@ void flash_firmware(const char* fullPath)
 {
     size_t count;
 
-    printf("%s: HEAP=%#010x\n", __func__, esp_get_free_heap_size());
+    printf("%s: HEAP=%#010lx\n", __func__, (unsigned long)esp_get_free_heap_size());
 
     ui_draw_title();
     ui_update_display();
@@ -520,7 +575,7 @@ void flash_firmware(const char* fullPath)
             return;
         }
 
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
     DisplayMessage("");
@@ -556,7 +611,7 @@ void flash_firmware(const char* fullPath)
         DisplayError("CHECKSUM READ ERROR");
         indicate_error();
     }
-    printf("%s: expected_checksum=%#010x\n", __func__, expected_checksum);
+    printf("%s: expected_checksum=%#010lx\n", __func__, (unsigned long)expected_checksum);
 
 
     fseek(file, 0, SEEK_SET);
@@ -577,7 +632,7 @@ void flash_firmware(const char* fullPath)
         if (count < ERASE_BLOCK_SIZE) break;
     }
 
-    printf("%s: checksum=%#010x\n", __func__, checksum);
+    printf("%s: checksum=%#010lx\n", __func__, (unsigned long)checksum);
 
     if (checksum != expected_checksum)
     {
@@ -603,7 +658,7 @@ void flash_firmware(const char* fullPath)
     }
 
     const size_t FLASH_START_ADDRESS = factory_part->address + factory_part->size;
-    printf("%s: FLASH_START_ADDRESS=%#010x\n", __func__, FLASH_START_ADDRESS);
+    printf("%s: FLASH_START_ADDRESS=%#010lx\n", __func__, (unsigned long)FLASH_START_ADDRESS);
 
 
     const size_t PARTS_MAX = 20;
@@ -670,8 +725,8 @@ void flash_firmware(const char* fullPath)
 
         if (length > slot.length)
         {
-            printf("%s: data length error - length=%x, slot.length=%x\n",
-                __func__, length, slot.length);
+            printf("%s: data length error - length=%lx, slot.length=%lx\n",
+                __func__, (unsigned long)length, (unsigned long)slot.length);
 
             DisplayError("DATA LENGTH ERROR");
             indicate_error();
@@ -696,10 +751,10 @@ void flash_firmware(const char* fullPath)
             DisplayProgress(0);
             DisplayMessage(tempstring);
 
-            esp_err_t ret = spi_flash_erase_range(curren_flash_address, eraseBlocks * ERASE_BLOCK_SIZE);
+            esp_err_t ret = esp_flash_erase_region(NULL, curren_flash_address, eraseBlocks * ERASE_BLOCK_SIZE);
             if (ret != ESP_OK)
             {
-                printf("spi_flash_erase_range failed. eraseBlocks=%d\n", eraseBlocks);
+                printf("esp_flash_erase_region failed. eraseBlocks=%d\n", eraseBlocks);
                 DisplayError("ERASE ERROR");
                 indicate_error();
             }
@@ -738,20 +793,15 @@ void flash_firmware(const char* fullPath)
                 // flash
                 //printf("Writing offset=0x%x\n", offset);
                 //ret = esp_partition_write(part, offset, data, count);
-                ret = spi_flash_write(curren_flash_address + offset, data, count);
-                if (ret != ESP_OK)
-        		{
-        			printf("spi_flash_write failed. address=%#08x\n", curren_flash_address + offset);
-                    DisplayError("WRITE ERROR");
-                    indicate_error();
-        		}
+                write_flash_checked(curren_flash_address + offset, data, count, "WRITE ERROR");
 
                 totalCount += count;
             }
 
             if (totalCount != length)
             {
-                printf("Size mismatch: lenght=%#08x, totalCount=%#08x\n", length, totalCount);
+                printf("Size mismatch: lenght=%#08lx, totalCount=%#08x\n",
+                    (unsigned long)length, totalCount);
                 DisplayError("DATA SIZE ERROR");
                 indicate_error();
             }
@@ -763,7 +813,7 @@ void flash_firmware(const char* fullPath)
 
 
             // Notify OK
-            sprintf(tempstring, "OK: [%d] Length=%#08x", parts_count, length);
+            sprintf(tempstring, "OK: [%d] Length=%#08lx", parts_count, (unsigned long)length);
 
             printf("%s\n", tempstring);
             //DisplayFooter(tempstring);
@@ -782,7 +832,7 @@ void flash_firmware(const char* fullPath)
 
     }
 
-    close(file);
+    fclose(file);
 
 
     // Utility
@@ -801,7 +851,7 @@ void flash_firmware(const char* fullPath)
         size_t length = ftell(util);
         fseek(util, 0, SEEK_SET);
 
-        printf("utility.bin - length=%d\n", length);
+        printf("utility.bin - length=%zu\n", length);
 
 
         // TODO: Determine if there is room
@@ -822,10 +872,10 @@ void flash_firmware(const char* fullPath)
         DisplayProgress(0);
         DisplayMessage(tempstring);
 
-        esp_err_t ret = spi_flash_erase_range(curren_flash_address, eraseBlocks * ERASE_BLOCK_SIZE);
+        esp_err_t ret = esp_flash_erase_region(NULL, curren_flash_address, eraseBlocks * ERASE_BLOCK_SIZE);
         if (ret != ESP_OK)
         {
-            printf("spi_flash_erase_range failed. eraseBlocks=%d\n", eraseBlocks);
+            printf("esp_flash_erase_region failed. eraseBlocks=%d\n", eraseBlocks);
             DisplayError("ERASE ERROR");
             indicate_error();
         }
@@ -864,13 +914,7 @@ void flash_firmware(const char* fullPath)
             // flash
             //printf("Writing offset=0x%x\n", offset);
             //ret = esp_partition_write(part, offset, data, count);
-            ret = spi_flash_write(curren_flash_address + offset, data, count);
-            if (ret != ESP_OK)
-            {
-                printf("spi_flash_write failed. address=%#08x\n", curren_flash_address + offset);
-                DisplayError("WRITE ERROR");
-                indicate_error();
-            }
+            write_flash_checked(curren_flash_address + offset, data, count, "WRITE ERROR");
 
             totalCount += count;
         }
@@ -944,7 +988,7 @@ static void ui_draw_title()
 
 static void ui_draw_page(char** files, int fileCount, int currentItem)
 {
-    printf("%s: HEAP=%#010x\n", __func__, esp_get_free_heap_size());
+    printf("%s: HEAP=%#010lx\n", __func__, (unsigned long)esp_get_free_heap_size());
 
     int page = currentItem / ITEM_COUNT;
     page *= ITEM_COUNT;
@@ -1045,7 +1089,7 @@ const char* ui_choose_file(const char* path)
 {
     const char* result = NULL;
 
-    printf("%s: HEAP=%#010x\n", __func__, esp_get_free_heap_size());
+    printf("%s: HEAP=%#010lx\n", __func__, (unsigned long)esp_get_free_heap_size());
 
     files = 0;
     fileCount = odroid_sdcard_files_get(path, ".fw", &files);
@@ -1173,7 +1217,7 @@ const char* ui_choose_file(const char* path)
 		}
 
         previousState = state;
-        vTaskDelay(10 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 
     odroid_sdcard_files_free(files, fileCount);
@@ -1226,7 +1270,7 @@ void app_main(void)
     strcat(VERSION, "-");
     strcat(VERSION, GITREV);
 
-    printf("odroid-go-firmware (%s). HEAP=%#010x\n", VERSION, esp_get_free_heap_size());
+    printf("odroid-go-firmware (%s). HEAP=%#010lx\n", VERSION, (unsigned long)esp_get_free_heap_size());
 
     nvs_flash_init();
 

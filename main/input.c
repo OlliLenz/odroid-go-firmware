@@ -163,9 +163,9 @@ void input_init()
     gpio_set_direction(ODROID_GAMEPAD_IO_B, GPIO_MODE_INPUT);
 	gpio_set_pull_mode(ODROID_GAMEPAD_IO_B, GPIO_PULLUP_ONLY);
 
-	adc1_config_width(ADC_WIDTH_12Bit);
-    adc1_config_channel_atten(ODROID_GAMEPAD_IO_X, ADC_ATTEN_11db);
-	adc1_config_channel_atten(ODROID_GAMEPAD_IO_Y, ADC_ATTEN_11db);
+	adc1_config_width(ADC_WIDTH_BIT_12);
+    adc1_config_channel_atten(ODROID_GAMEPAD_IO_X, ADC_ATTEN_DB_12);
+	adc1_config_channel_atten(ODROID_GAMEPAD_IO_Y, ADC_ATTEN_DB_12);
 
 	gpio_set_direction(ODROID_GAMEPAD_IO_MENU, GPIO_MODE_INPUT);
 	gpio_set_pull_mode(ODROID_GAMEPAD_IO_MENU, GPIO_PULLUP_ONLY);

@@ -7,7 +7,6 @@
 #include "driver/sdspi_host.h"
 #include "sdmmc_cmd.h"
 #include "esp_heap_caps.h"
-#include "esp_spiffs.h"
 
 #include <dirent.h>
 #include <string.h>
@@ -23,6 +22,8 @@
 
 
 static bool isOpen = false;
+static sdmmc_card_t* mounted_card = NULL;
+static char mounted_base_path[16] = {0};
 
 
 
@@ -189,11 +190,9 @@ esp_err_t odroid_sdcard_open(const char* base_path)
     	//host.max_freq_khz = SDMMC_FREQ_HIGHSPEED; //10000000;
         host.max_freq_khz = SDMMC_FREQ_DEFAULT;
 
-    	sdspi_slot_config_t slot_config = SDSPI_SLOT_CONFIG_DEFAULT();
-    	slot_config.gpio_miso = (gpio_num_t)SD_PIN_NUM_MISO;
-    	slot_config.gpio_mosi = (gpio_num_t)SD_PIN_NUM_MOSI;
-    	slot_config.gpio_sck  = (gpio_num_t)SD_PIN_NUM_CLK;
+        sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     	slot_config.gpio_cs = (gpio_num_t)SD_PIN_NUM_CS;
+        slot_config.host_id = host.slot;
     	//slot_config.dma_channel = 2;
 
     	// Options for mounting the filesystem.
@@ -210,11 +209,11 @@ esp_err_t odroid_sdcard_open(const char* base_path)
     	// Note: esp_vfs_fat_sdmmc_mount is an all-in-one convenience function.
     	// Please check its source code and implement error recovery when developing
     	// production applications.
-    	sdmmc_card_t* card;
-    	ret = esp_vfs_fat_sdmmc_mount(base_path, &host, &slot_config, &mount_config, &card);
+        ret = esp_vfs_fat_sdspi_mount(base_path, &host, &slot_config, &mount_config, &mounted_card);
 
     	if (ret == ESP_OK)
         {
+            strlcpy(mounted_base_path, base_path, sizeof(mounted_base_path));
             isOpen = true;
         }
         else
@@ -238,12 +237,18 @@ esp_err_t odroid_sdcard_close()
     }
     else
     {
-        ret = esp_vfs_fat_sdmmc_unmount();
+        ret = esp_vfs_fat_sdcard_unmount(mounted_base_path, mounted_card);
 
         if (ret != ESP_OK)
         {
             printf("odroid_sdcard_close: esp_vfs_fat_sdmmc_unmount failed (%d)\n", ret);
     	}
+        else
+        {
+            mounted_card = NULL;
+            mounted_base_path[0] = '\0';
+            isOpen = false;
+        }
     }
 
     return ret;

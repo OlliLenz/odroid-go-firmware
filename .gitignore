@@ -1,5 +1,6 @@
 build/
+build-v5.5/
+.vscode/settings.user.json
 sdkconfig.old
 firmware.fw
 *.gch
-

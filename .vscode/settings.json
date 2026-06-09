@@ -1,0 +1,27 @@
+{
+    "idf.buildPath": "${workspaceFolder}/build",
+    "idf.sdkconfigDefaults": [
+        "${workspaceFolder}/sdkconfig.defaults"
+    ],
+    "idf.flashBaudRate": "460800",
+    "idf.monitorBaudRate": "115200",
+    "idf.openOcdConfigs": [
+        "board/esp32-wrover-kit-3.3v.cfg"
+    ],
+    "idf.flashType": "UART",
+    "idf.flashPartitionToUse": "all",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+    "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
+    "C_Cpp.default.browse.path": [
+        "${workspaceFolder}/main",
+        "${workspaceFolder}/components"
+    ],
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}/build",
+        "--query-driver=~/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/bin/xtensa-esp32-elf-*"
+    ],
+    "idf.currentSetup": "~/.espressif/v5.5.3/esp-idf",
+    "idf.port": "/dev/ttyUSB0",
+    "idf.monitorPort": "/dev/ttyUSB0",
+    "C_Cpp.default.compilerPath": "~/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20251107/xtensa-esp-elf/bin/xtensa-esp32-elf-gcc",
+}

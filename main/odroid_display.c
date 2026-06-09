@@ -58,17 +58,6 @@ typedef struct {
 } ili_init_cmd_t;
 
 #define TFT_CMD_SWRESET	0x01
-#define TFT_CMD_SLEEP 0x10
-#define TFT_CMD_DISPLAY_OFF 0x28
-
-static const ili_init_cmd_t ili_sleep_cmds[] = {
-    {TFT_CMD_SWRESET, {0}, 0x80},
-    {TFT_CMD_DISPLAY_OFF, {0}, 0x80},
-    {TFT_CMD_SLEEP, {0}, 0x80},
-    {0, {0}, 0xff}
-};
-
-
 // 2.4" LCD
 static const ili_init_cmd_t ili_init_cmds[] = {
     // VCI=2.8V
@@ -180,7 +169,7 @@ static void ili_init()
         ili_cmd(spi, ili_init_cmds[cmd].cmd);
         ili_data(spi, ili_init_cmds[cmd].data, ili_init_cmds[cmd].databytes & 0x7f);
         if (ili_init_cmds[cmd].databytes&0x80) {
-            vTaskDelay(100 / portTICK_RATE_MS);
+            vTaskDelay(pdMS_TO_TICKS(100));
         }
         cmd++;
     }
@@ -204,14 +193,14 @@ static void send_reset_drawing(int left, int top, int width, int height)
 
   // Queue all transactions.
   for (int x = 0; x < 5; x++) {
-      ret=spi_device_queue_trans(spi, &trans[x], 1000 / portTICK_RATE_MS);
+      ret=spi_device_queue_trans(spi, &trans[x], pdMS_TO_TICKS(1000));
       assert(ret==ESP_OK);
   }
 
   // Wait for all transactions
   spi_transaction_t *rtrans;
   for (int x = 0; x < 5; x++) {
-      ret=spi_device_get_trans_result(spi, &rtrans, 1000 / portTICK_RATE_MS);
+      ret=spi_device_get_trans_result(spi, &rtrans, pdMS_TO_TICKS(1000));
       assert(ret==ESP_OK);
   }
 }
@@ -232,7 +221,7 @@ static void send_continue_line(uint16_t *line, int width, int lineCount)
 
   //Queue all transactions.
   for (int x = 6; x < 8; x++) {
-      ret=spi_device_queue_trans(spi, &trans[x], 1000 / portTICK_RATE_MS);
+      ret=spi_device_queue_trans(spi, &trans[x], pdMS_TO_TICKS(1000));
       assert(ret==ESP_OK);
   }
 
@@ -253,7 +242,7 @@ static void backlight_init()
   ledc_timer_config_t ledc_timer;
 	memset(&ledc_timer, 0, sizeof(ledc_timer));
 
-  ledc_timer.bit_num = LEDC_TIMER_13_BIT; //set timer counter bit number
+  ledc_timer.duty_resolution = LEDC_TIMER_13_BIT; //set timer counter bit number
   ledc_timer.freq_hz = 5000;              //set frequency of pwm
   ledc_timer.speed_mode = LEDC_LOW_SPEED_MODE;   //timer mode,
   ledc_timer.timer_num = LEDC_TIMER_0;    //timer index

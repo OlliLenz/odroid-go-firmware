@@ -1,0 +1,75 @@
+name: Build firmware
+run-name: Building odroid-go firmware
+on:
+  push:
+    branches:
+      - main
+      - master
+      - update_to_idf_5.5.3
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ESP-IDF firmware
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.3
+          target: esp32
+          path: "."
+          command: |
+            bash -lc '
+              set -euo pipefail
+              BUILD_DIR=build-ci
+              ARTIFACT_DIR=firmware-artifacts
+              idf.py -B "$BUILD_DIR" build
+              rm -rf "$ARTIFACT_DIR"
+              mkdir -p "$ARTIFACT_DIR"
+              cp "$BUILD_DIR/odroid-go-firmware.bin" "$ARTIFACT_DIR/"
+              cp "$BUILD_DIR/bootloader/bootloader.bin" "$ARTIFACT_DIR/"
+              cp "$BUILD_DIR/partition_table/partition-table.bin" "$ARTIFACT_DIR/"
+              cp "$BUILD_DIR/ota_data_initial.bin" "$ARTIFACT_DIR/"
+              cp "$BUILD_DIR/flash_args" "$ARTIFACT_DIR/"
+              cp "$BUILD_DIR/flasher_args.json" "$ARTIFACT_DIR/"
+              cp "$BUILD_DIR/compile_commands.json" "$ARTIFACT_DIR/"
+              cd "$BUILD_DIR"
+              esptool.py --chip esp32 merge_bin \
+                -o "../$ARTIFACT_DIR/firmware.img" \
+                @flash_args
+              cd ..
+              cp "$ARTIFACT_DIR/firmware.img" "$ARTIFACT_DIR/odroid-go-firmware-full-flash.bin"
+              {
+                printf "%s\n" "Flashing options:"
+                printf "%s\n" ""
+                printf "%s\n" "1. ESP-IDF/esptool normal multi-file flash:"
+                printf "%s\n" "   use flash_args with the files in this artifact."
+                printf "%s\n" ""
+                printf "%s\n" "2. Espressif Flash Download Tool / GUI single-file flash:"
+                printf "%s\n" "   flash firmware.img at offset 0x0."
+                printf "%s\n" "   odroid-go-firmware-full-flash.bin is the same image with a descriptive name."
+                printf "%s\n" ""
+                printf "%s\n" "App-only binary:"
+                printf "%s\n" "   odroid-go-firmware.bin is only the factory app image at offset 0x10000."
+              } > "$ARTIFACT_DIR/README.txt"
+            '
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: odroid-go-firmware-${{ github.sha }}
+          path: firmware-artifacts/
+          if-no-files-found: error
+          retention-days: 30
